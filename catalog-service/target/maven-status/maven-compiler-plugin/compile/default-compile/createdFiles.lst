@@ -1,0 +1,6 @@
+com\nexgate\catalog\CatalogServiceApplication.class
+com\nexgate\catalog\dto\CreateProductRequest.class
+com\nexgate\catalog\service\CatalogService.class
+com\nexgate\catalog\controller\CatalogController.class
+com\nexgate\catalog\controller\CatalogSlowController.class
+com\nexgate\catalog\dto\ProductResponse.class
