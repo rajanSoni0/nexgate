@@ -18,12 +18,12 @@
   <name>NexGate</name>
 
   <modules>
-    <module>common</module>
-    <module>api-management-service</module>
-    <module>smart-gateway-service</module>
-    <module>analytics-service</module>
-    <module>catalog-service</module>
-    <module>order-service</module>
+    <module>backend/common</module>
+    <module>backend/api-management-service</module>
+    <module>backend/smart-gateway-service</module>
+    <module>backend/analytics-service</module>
+    <module>backend/catalog-service</module>
+    <module>backend/order-service</module>
   </modules>
 
   <properties>

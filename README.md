@@ -1,4 +1,4 @@
-"# NexGate
+# NexGate
 
 NexGate is a custom API gateway and API management platform built with Java 21 and Spring Boot 3.x.
 
@@ -37,7 +37,6 @@ NEXGATE_JWT_ISSUER=gatekeeper-api-management
 ```
 
 API Management issues `sub`, `role`, `iat`, `exp`, optional `organizationId`, and an issuer of `gatekeeper-api-management`. Protected routes require a Bearer token and at least one permitted role. Authorization forwarding is disabled unless the route explicitly contains a request `FORWARD` rule for `Authorization`.
-" 
 
 
 ## Demo service endpoints
@@ -78,9 +77,9 @@ When a Gateway route is configured to rewrite `/catalog/**` to `/api/catalog/**`
 
 Route policies provide rateLimitEnabled, rateLimitRequests, rateLimitWindowSeconds, and rateLimitScope. The Gateway uses an atomic Redis Lua fixed-window counter. Keys include organization, route, scope, identity, and time bucket:
 
-`	ext
+```text
 nexgate:ratelimit:<organization>:<route>:<scope>:<identity>:<window-bucket>
-` 
+```
 
 Supported scopes are ROUTE, USER, TENANT, and IP. USER uses the validated JWT subject, IP uses the direct servlet remote address, and TENANT uses the route organization. Redis failures fail closed for rate-limited routes. Configure NEXGATE_REDIS_URL as the Redis connection URL.
 
@@ -90,3 +89,11 @@ Supported scopes are ROUTE, USER, TENANT, and IP. USER uses the validated JWT su
 
 Routes with idempotencyEnabled=true require an Idempotency-Key on POST requests. Records are keyed by organization, route ID, and key. Redis stores processing or completed state with a TTL. Replays save status, body, and headers; concurrent duplicates or different payloads return 409; missing keys return 400; Redis failures return 503. Configure NEXGATE_IDEMPOTENCY_TTL_SECONDS (default 86400).
 
+
+## Analytics access
+
+`/api/analytics/**` requires a Bearer JWT issued by API Management with role `PLATFORM_ADMIN` (statistics span all tenants). Analytics needs the same `NEXGATE_JWT_SECRET` and `NEXGATE_JWT_ISSUER` as the other services.
+
+## Startup order
+
+The Smart Gateway loads routes from API Management at startup and retries (`nexgate.management.startup-max-attempts`, default 30, every `startup-retry-delay-ms`, default 2000) before refusing to start. Compose also waits for API Management to be healthy.

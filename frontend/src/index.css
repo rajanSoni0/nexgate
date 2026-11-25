@@ -1,0 +1,142 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * NexGate design tokens.
+ * Navy chrome, neutral canvas, one blue accent, status colors used only for state.
+ */
+:root {
+  --app-canvas: #f5f7fa;
+  --app-surface: #ffffff;
+  --app-surface-2: #f0f3f7;
+  --app-line: #e2e7ee;
+  --app-line-strong: #cbd3de;
+  --app-fg: #0f1b2d;
+  --app-fg-muted: #4f5f77;
+  --app-fg-subtle: #7a889d;
+  --app-accent: #2f6feb;
+  --app-accent-hover: #255dcc;
+  --app-accent-soft: #eaf1fe;
+  --app-accent-fg: #1d4fb8;
+  --app-success: #12a150;
+  --app-success-soft: #e7f6ee;
+  --app-success-fg: #0c7a3c;
+  --app-danger: #d93d42;
+  --app-danger-soft: #fdeced;
+  --app-danger-fg: #b3262b;
+  --app-warning: #d98e04;
+  --app-warning-soft: #fdf4e2;
+  --app-warning-fg: #8f5d00;
+  --app-shadow: 0 1px 2px rgb(15 27 45 / 0.05);
+  --app-shadow-pop: 0 12px 32px -8px rgb(15 27 45 / 0.22);
+  color-scheme: light;
+}
+
+.dark {
+  --app-canvas: #0b1322;
+  --app-surface: #111c2e;
+  --app-surface-2: #16233a;
+  --app-line: #22324a;
+  --app-line-strong: #30456a;
+  --app-fg: #e6ecf5;
+  --app-fg-muted: #a3b1c6;
+  --app-fg-subtle: #74859f;
+  --app-accent: #4c86f2;
+  --app-accent-hover: #6b9bf5;
+  --app-accent-soft: color-mix(in srgb, #4c86f2 16%, transparent);
+  --app-accent-fg: #8fb3f8;
+  --app-success: #2bbd6a;
+  --app-success-soft: color-mix(in srgb, #2bbd6a 15%, transparent);
+  --app-success-fg: #5fd394;
+  --app-danger: #ef5a5f;
+  --app-danger-soft: color-mix(in srgb, #ef5a5f 15%, transparent);
+  --app-danger-fg: #f68b8f;
+  --app-warning: #e9a420;
+  --app-warning-soft: color-mix(in srgb, #e9a420 15%, transparent);
+  --app-warning-fg: #f1bf5c;
+  --app-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  --app-shadow-pop: 0 16px 40px -8px rgb(0 0 0 / 0.6);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-canvas: var(--app-canvas);
+  --color-surface: var(--app-surface);
+  --color-surface-2: var(--app-surface-2);
+  --color-line: var(--app-line);
+  --color-line-strong: var(--app-line-strong);
+  --color-fg: var(--app-fg);
+  --color-fg-muted: var(--app-fg-muted);
+  --color-fg-subtle: var(--app-fg-subtle);
+  --color-accent: var(--app-accent);
+  --color-accent-hover: var(--app-accent-hover);
+  --color-accent-soft: var(--app-accent-soft);
+  --color-accent-fg: var(--app-accent-fg);
+  --color-success: var(--app-success);
+  --color-success-soft: var(--app-success-soft);
+  --color-success-fg: var(--app-success-fg);
+  --color-danger: var(--app-danger);
+  --color-danger-soft: var(--app-danger-soft);
+  --color-danger-fg: var(--app-danger-fg);
+  --color-warning: var(--app-warning);
+  --color-warning-soft: var(--app-warning-soft);
+  --color-warning-fg: var(--app-warning-fg);
+
+  /* Navy chrome — constant in both themes. */
+  --color-navy-950: #08111f;
+  --color-navy-900: #0e1a2e;
+  --color-navy-800: #16253d;
+  --color-navy-700: #223552;
+  --color-navy-300: #a9b6cc;
+  --color-navy-200: #c9d3e3;
+
+  --shadow-card: var(--app-shadow);
+  --shadow-pop: var(--app-shadow-pop);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-canvas text-fg font-sans antialiased;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  :focus-visible {
+    outline: 2px solid var(--app-accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--app-accent) 25%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+.skeleton {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+  background: var(--app-surface-2);
+}

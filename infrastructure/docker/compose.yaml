@@ -1,0 +1,185 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-nexgate_management}
+      MYSQL_USER: ${MYSQL_USER:-nexgate}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongodb:
+    image: mongo:7.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-password}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --username
+        - ${MONGO_ROOT_USERNAME:-root}
+        - --password
+        - ${MONGO_ROOT_PASSWORD:-password}
+        - --authenticationDatabase
+        - admin
+        - --eval
+        - db.adminCommand('ping').ok
+      interval: 10s
+      timeout: 20s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    hostname: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic gateway-access-events --partitions 3 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic gateway-configuration-events --partitions 3 --replication-factor 1
+
+  api-management:
+    build:
+      context: .
+      dockerfile: backend/api-management-service/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      NEXGATE_MYSQL_URL: jdbc:mysql://mysql:3306/nexgate_management
+      NEXGATE_MYSQL_USERNAME: ${MYSQL_USER:-nexgate}
+      NEXGATE_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
+      NEXGATE_JWT_SECRET: ${NEXGATE_JWT_SECRET:?set NEXGATE_JWT_SECRET (>= 32 bytes) in .env}
+      NEXGATE_JWT_ISSUER: ${NEXGATE_JWT_ISSUER:-gatekeeper-api-management}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  smart-gateway:
+    build:
+      context: .
+      dockerfile: backend/smart-gateway-service/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      NEXGATE_REDIS_URL: redis://redis:6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      NEXGATE_MANAGEMENT_BASE_URL: http://api-management:8081
+      NEXGATE_JWT_SECRET: ${NEXGATE_JWT_SECRET:?set NEXGATE_JWT_SECRET (>= 32 bytes) in .env}
+      NEXGATE_JWT_ISSUER: ${NEXGATE_JWT_ISSUER:-gatekeeper-api-management}
+      NEXGATE_GATEWAY_USERNAME: gateway-service
+      NEXGATE_GATEWAY_PASSWORD: ${NEXGATE_GATEWAY_PASSWORD:?set NEXGATE_GATEWAY_PASSWORD in .env}
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      api-management:
+        condition: service_healthy
+
+  analytics:
+    build:
+      context: .
+      dockerfile: backend/analytics-service/Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      NEXGATE_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD:-password}@mongodb:27017/${MONGO_DATABASE:-nexgate_analytics}?authSource=admin
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      NEXGATE_JWT_SECRET: ${NEXGATE_JWT_SECRET:?set NEXGATE_JWT_SECRET (>= 32 bytes) in .env}
+      NEXGATE_JWT_ISSUER: ${NEXGATE_JWT_ISSUER:-gatekeeper-api-management}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  catalog:
+    build:
+      context: .
+      dockerfile: backend/catalog-service/Dockerfile
+    ports:
+      - "8082:8082"
+
+  order:
+    build:
+      context: .
+      dockerfile: backend/order-service/Dockerfile
+    ports:
+      - "8083:8083"
+
+volumes:
+  mysql-data:
+  mongo-data:
+  redis-data:
+  kafka-data:
