@@ -35,3 +35,9 @@ logs/
 # Node (if applicable)
 node_modules/
 dist/
+# Frontend test coverage
+coverage/
+
+# Nested frontend build and test outputs
+**/dist/
+**/coverage/
