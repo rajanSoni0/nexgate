@@ -3,6 +3,8 @@ package in.rajan.nexgate.management.service;
 import in.rajan.nexgate.management.dto.requestDto.HeaderRuleRequest;
 import in.rajan.nexgate.management.dto.requestDto.RouteRequest;
 import in.rajan.nexgate.management.exception.ApiException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +17,18 @@ public class RoutePolicyValidator {
     private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS");
     private static final Set<String> APPLICATION_ROLES = Set.of("PLATFORM_ADMIN", "TENANT_ADMIN", "GATEWAY_SERVICE", "USER", "ADMIN");
 
+    private final UpstreamTargetGuard targetGuard;
+
+    public RoutePolicyValidator() {
+        this("catalog,order");
+    }
+
+    @Autowired
+    public RoutePolicyValidator(
+            @Value("${nexgate.routing.allowed-internal-hosts:catalog,order}") String allowedInternalHosts) {
+        this.targetGuard = new UpstreamTargetGuard(allowedInternalHosts);
+    }
+
     public void validate(RouteRequest request) {
         URI uri;
         try {
@@ -24,6 +38,10 @@ public class RoutePolicyValidator {
         }
         if (uri.getScheme() == null || !(uri.getScheme().equalsIgnoreCase("http") || uri.getScheme().equalsIgnoreCase("https")) || uri.getHost() == null) {
             throw bad("Target URI must be an absolute HTTP or HTTPS URI");
+        }
+        String targetProblem = targetGuard.check(uri);
+        if (targetProblem != null) {
+            throw bad(targetProblem);
         }
         if (!request.pathPattern().startsWith("/")) {
             throw bad("Path pattern must start with '/' ");
