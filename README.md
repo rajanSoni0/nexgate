@@ -1,3 +1,4 @@
+
 <div align="center">
 
 # NexGate
@@ -68,8 +69,9 @@ It consists of **five independent Spring Boot services**, a **shared `common` mo
 | **URL** | https://nex-gate.dev |
 | **Username** | `demouser1` |
 | **Password** | `demouser1` |
+| **Role** | Tenant Admin |
 
-> The demo environment is shared and public. Please read [Demo Guidelines](#demo-guidelines) before experimenting.
+> `demouser1` is a **Tenant Admin** account: it can manage routes and policies for its own tenant. Accounts cannot be self-registered. In NexGate only the Platform Admin provisions users and tenants, which is why a shared demo login is provided. The environment is shared and public, so please read the [Demo Guidelines](#demo-guidelines) before experimenting.
 
 ### Demo Guidelines
 
@@ -79,12 +81,14 @@ The demo account exists so anyone can explore NexGate without installing anythin
 
 - Browse the console, routes, policies and analytics.
 - Send test traffic through the gateway and watch it appear in analytics.
-- Break things in your own mind, then tell me how you would have broken them (see [Contributing](#contributing)).
+- Create and edit routes that point to the bundled demo services (`catalog` and `order`), attach policies, and send traffic through the gateway.
+- Found a bug or a security concern? Please report it (see [Contributing](#contributing)).
 
 **Please don't**
 
 - Change the demo account's password or delete shared data.
-- Point routes at third-party or internal addresses, or use the gateway to scan or attack anything.
+- Point routes at internal or private addresses, or at third-party sites you do not own, and never use the gateway to scan or attack anything. Activity is logged.
+- Share the login with others publicly in bulk or automate sign-ins.
 - Upload sensitive or personal data. Everything on the demo is visible to other visitors.
 - Run load tests. The demo runs on a single small instance.
 
@@ -342,6 +346,7 @@ All configuration is environment-driven. Copy `.env.example` to `.env`. **Never 
 | `NEXGATE_REDIS_URL` | No | Default `redis://redis:6379`. |
 | `KAFKA_BOOTSTRAP_SERVERS` | No | Default `kafka:29092` (inside the Docker network). |
 | `NEXGATE_MANAGEMENT_BASE_URL` | No | Default `http://api-management:8081`. |
+| `nexgate.routing.allowed-internal-hosts` | No | Comma-separated internal hostnames that routes may target. Default `catalog,order`. All other private, loopback and link-local targets are rejected (SSRF protection). |
 
 The compose file refuses to start if `NEXGATE_JWT_SECRET` or `NEXGATE_GATEWAY_PASSWORD` is unset.
 
@@ -584,7 +589,9 @@ Named volumes (`mysql-data`, `mongo-data`, `redis-data`, `kafka-data`) persist a
 - **Use a strong, unique `NEXGATE_JWT_SECRET`.** Anyone holding it can mint valid tokens for every service.
 - **Keep datastores private.** Never open database or Kafka ports to the internet.
 - **Terminate TLS at the edge.** Credentials and tokens travel in requests; do not serve the console over plain HTTP.
-- **Demo/shared accounts must be least-privilege.** The management console controls routing. A user who can create routes can make the gateway forward traffic to arbitrary hosts (server-side request forgery risk). Give public demo users a read-only or heavily restricted role, and validate route targets against an allow-list.
+- **Route targets are a trust boundary.** A tenant admin chooses where the gateway forwards traffic. Without validation this becomes a server-side request forgery (SSRF) path to internal services (databases, the management API, the cloud metadata endpoint). Validate route upstreams against an allow-list, and reject loopback, private and link-local ranges after DNS resolution.
+- **Shared demo accounts are least-privilege and disposable.** The public demo uses a Tenant Admin account scoped to its own tenant. It cannot create users or tenants, and its data may be reset at any time.
+- **Harden the host:** require IMDSv2 on the EC2 instance with a hop limit of 1, and keep datastores unreachable from the internet.
 - **Secrets stay out of Git.** `.env` is ignored; never paste its contents into issues, chats or logs.
 - Report vulnerabilities privately to the maintainer rather than opening a public issue.
 
