@@ -1,561 +1,629 @@
+<div align="center">
+
 # NexGate
 
-**A multi-tenant API gateway and API management platform built with Java 21, Spring Boot 3 and React.**
+**A custom API Gateway and API Management platform built from scratch with Java 21 and Spring Boot.**
 
-NexGate lets platform operators onboard organizations, and lets each organization publish and govern its own API routes: authentication, role-based access, rate limiting, idempotency, timeouts, path rewriting and header transformation. Every route change is versioned, audited and pushed to the running gateway in near real time, without a restart.
+Dynamic routing · JWT authentication · Rate limiting · Idempotency · Event-driven analytics
+
+![Java](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-6DB33F)
+![MySQL](https://img.shields.io/badge/MySQL-8.4-4479A1)
+![MongoDB](https://img.shields.io/badge/MongoDB-7.0-47A248)
+![Redis](https://img.shields.io/badge/Redis-7.4-DC382D)
+![Kafka](https://img.shields.io/badge/Kafka-7.7-231F20)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
+![React](https://img.shields.io/badge/React-19-61DAFB)
+
+[Live Demo](https://nex-gate.dev) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Deployment](#production-deployment-aws-ec2)
+
+</div>
 
 ---
 
-## Demo Account
+## Table of Contents
 
-You can explore the NexGate Console using the following demo credentials:
+1. [Overview](#overview)
+2. [Live Demo](#live-demo)
+3. [Features](#features)
+4. [Architecture](#architecture)
+5. [Request Lifecycle](#request-lifecycle)
+6. [Services](#services)
+7. [Tech Stack](#tech-stack)
+8. [Repository Structure](#repository-structure)
+9. [Quick Start](#quick-start)
+10. [Configuration](#configuration)
+11. [Default Accounts and Security Hardening](#default-accounts-and-security-hardening)
+12. [Frontend Console](#frontend-console)
+13. [Production Deployment (AWS EC2)](#production-deployment-aws-ec2)
+14. [Operations Runbook](#operations-runbook)
+15. [Troubleshooting](#troubleshooting)
+16. [Security Considerations](#security-considerations)
+17. [Roadmap](#roadmap)
+18. [Contributing](#contributing)
+19. [License](#license)
+20. [Author](#author)
 
-| Field | Value |
+---
+
+## Overview
+
+NexGate is a self-built API Gateway and API Management platform. It sits in front of downstream microservices and handles the cross-cutting concerns every API needs: authentication, authorization, routing, traffic control, request transformation and observability.
+
+The project is deliberately built without an off-the-shelf gateway product. The goal is to understand and implement gateway architecture from first principles, with a focus on:
+
+- Security (stateless JWT, role-based access, service-to-service identity)
+- Scalability (stateless gateway, Redis-backed shared state, partitioned Kafka topics)
+- Distributed systems (event-driven configuration propagation, eventual consistency)
+- Microservice communication (reverse proxying, correlation IDs, health checks)
+
+It consists of **five independent Spring Boot services**, a **shared `common` module**, and a **React management console**.
+
+---
+
+## Live Demo
+
+| | |
 |---|---|
-| Username | `demouser1` |
-| Password | `demouser1` |
+| **URL** | https://nex-gate.dev |
+| **Username** | `demouser1` |
+| **Password** | `demouser1` |
 
-**Login:** https://nex-gate.dev/
+> The demo environment is shared and public. Please read [Demo Guidelines](#demo-guidelines) before experimenting.
 
-> **Note:** This is a demo account intended for evaluation and exploration. Please do not use these credentials for sensitive activities.
+### Demo Guidelines
 
----
+The demo account exists so anyone can explore NexGate without installing anything.
 
-## Table of contents
+**Please do**
 
-- [Highlights](#highlights)
-- [Architecture](#architecture)
-- [Features](#features)
-  - [Smart Gateway (data plane)](#smart-gateway-data-plane)
-  - [API Management (control plane)](#api-management-control-plane)
-  - [Analytics](#analytics)
-  - [NexGate Console (web UI)](#nexgate-console-web-ui)
-  - [Demo services](#demo-services)
-- [Roles and access](#roles-and-access)
-- [Tech stack](#tech-stack)
-- [Getting started](#getting-started)
-- [End-to-end walkthrough](#end-to-end-walkthrough)
-- [API reference](#api-reference)
-- [Configuration](#configuration)
-- [Testing](#testing)
-- [Project structure](#project-structure)
-- [Known limitations](#known-limitations)
+- Browse the console, routes, policies and analytics.
+- Send test traffic through the gateway and watch it appear in analytics.
+- Break things in your own mind, then tell me how you would have broken them (see [Contributing](#contributing)).
 
----
+**Please don't**
 
-## Highlights
+- Change the demo account's password or delete shared data.
+- Point routes at third-party or internal addresses, or use the gateway to scan or attack anything.
+- Upload sensitive or personal data. Everything on the demo is visible to other visitors.
+- Run load tests. The demo runs on a single small instance.
 
-- **Dynamic routing** with exact, path-variable and wildcard patterns, resolved by specificity.
-- **Per-route policies** configured from the UI or API: JWT auth and roles, Redis rate limiting, POST idempotency, timeouts, path rewriting, header rules.
-- **Hot configuration reload.** Changes flow through a transactional outbox to Kafka, and the gateway refreshes its route table without downtime.
-- **Multi-tenancy** with strict tenant isolation enforced server-side.
-- **Full route version history** with snapshots, field-level comparison and one-click restore.
-- **Audit trail** for every administrative route operation.
-- **Event-driven analytics** from gateway access events into MongoDB.
-- **Tested.** Backend unit and integration tests per service, plus 86 frontend tests.
-
----
-
-## Architecture
-
-NexGate separates the **control plane** (where routes are defined) from the **data plane** (where traffic flows).
-
-```mermaid
-flowchart LR
-    Client([API client]) -->|HTTP| GW
-
-    subgraph DataPlane[Data plane]
-        GW[Smart Gateway :8080]
-    end
-
-    subgraph ControlPlane[Control plane]
-        MGMT[API Management :8081]
-    end
-
-    Admin([Platform / Tenant admin]) --> UI[NexGate Console :5173]
-    UI -->|JWT| MGMT
-    UI -->|JWT| AN
-
-    MGMT -->|JPA + Flyway| MYSQL[(MySQL)]
-    MGMT -->|outbox publisher| K{{Kafka}}
-
-    K -->|gateway-configuration-events| GW
-    GW -->|fetch active routes| MGMT
-    GW -->|rate limit + idempotency| REDIS[(Redis)]
-    GW -->|gateway-access-events| K
-    GW -->|proxied request| DS[Downstream services]
-
-    K -->|gateway-access-events| AN[Analytics :8084]
-    AN --> MONGO[(MongoDB)]
-
-    DS --- CAT[Catalog :8082]
-    DS --- ORD[Order :8083]
-```
-
-| Module | Port | Responsibility | Data store |
-|---|---|---|---|
-| `api-management-service` | 8081 | Control plane: authentication, organizations, tenant admins, routes, policies, versions, audit | MySQL |
-| `smart-gateway-service` | 8080 | Data plane: route matching, auth, policies, proxying, access events | Redis (in-memory route table) |
-| `analytics-service` | 8084 | Consumes access events and serves traffic statistics | MongoDB |
-| `catalog-service` | 8082 | Demo downstream service (products) | In memory |
-| `order-service` | 8083 | Demo downstream service (orders) | In memory |
-| `common` | , | Shared, dependency-light event contracts | , |
-| `frontend` | 5173 | NexGate Console (React admin UI) | , |
-
-**How a configuration change reaches the gateway**
-
-1. An admin creates or edits a route in API Management.
-2. In the same database transaction, a version snapshot and an **outbox** row are written (no lost events).
-3. A scheduler publishes pending outbox rows to the `gateway-configuration-events` Kafka topic.
-4. The gateway receives the event, fetches the authoritative active-route list from API Management, validates it and atomically swaps its in-memory registry.
+The demo database and analytics data may be reset at any time without notice. Abuse may result in the account being disabled.
 
 ---
 
 ## Features
 
-### Smart Gateway (data plane)
+### Smart Gateway
+- **Dynamic routing**: routes are loaded from the management service and refreshed live over Kafka, with no restart or redeploy.
+- **JWT authentication**: HS256 tokens validated at the edge, with issuer verification.
+- **Rate limiting**: per-policy limits with counters stored in Redis, so limits hold across multiple gateway instances.
+- **Idempotency**: repeated requests with the same idempotency key return the original result within a configurable TTL (default 24 h).
+- **Request transformation**: header and request rewriting before forwarding.
+- **Reverse proxying**: forwards to downstream services and returns structured JSON errors (for example `ROUTE_NOT_FOUND`).
+- **Correlation IDs**: every response carries an `X-Correlation-ID` for end-to-end tracing.
 
-**Routing and matching**
-- Matches on HTTP method and path against the in-memory route registry.
-- Supported patterns: exact (`/orders/list`), path variables (`/orders/{id}`), single-segment wildcard (`/orders/*`) and multi-segment wildcard (`/orders/**`).
-- When several routes match, the **most specific wins** (exact > path variable > `/*` > `/**`).
-- Distinguishes `404 ROUTE_NOT_FOUND` from `405 METHOD_NOT_ALLOWED` (path matches, method does not).
-- Rejects duplicate method-and-path registrations when loading a configuration.
-
-**Path handling**
-- **Strip prefix:** forward only the part of the path after the matched prefix.
-- **Path rewriting:** replace the matched prefix with a configured target prefix (for example `/catalog/**` to `/api/catalog/**`).
-- Target base paths are joined safely, and query strings are preserved.
-
-**Authentication and authorization**
-- Validates **HS256 JWTs locally**, with no call to the control plane per request. Checks signature, expiry, issuer and subject.
-- Reads roles from the `role` claim and/or a `roles` claim (string or list).
-- Per-route policy: public, or authentication required with a list of permitted roles.
-- Returns `401` (`MISSING_JWT` / `INVALID_JWT`) or `403` (`INSUFFICIENT_ROLE`).
-- A protected route with no permitted roles denies everyone.
-
-**Rate limiting**
-- Redis-backed **fixed-window counter**, executed atomically through a Lua script.
-- Configurable per route: request count, window in seconds and scope.
-- Scopes: `ROUTE`, `USER` (JWT subject), `TENANT` (route organization), `IP` (remote address).
-- Keys include organization, route, scope, identity and window bucket.
-- Returns `429 RATE_LIMIT_EXCEEDED` with a `Retry-After` header.
-- **Fails closed**: if Redis is unavailable, rate-limited routes return `503 RATE_LIMIT_STORE_UNAVAILABLE`.
-
-**POST idempotency**
-- Routes can require an `Idempotency-Key` header on POST requests.
-- Records are keyed by organization, route and key, and stored in Redis with a TTL (default 24 h).
-- A completed request is **replayed** (status, body and headers) for the same key and payload.
-- Concurrent duplicates, or the same key with a different payload, return `409 IDEMPOTENCY_CONFLICT`.
-- A missing key returns `400`. Store failures return `503`.
-- Abandons the key if the downstream call fails, so the client can safely retry.
-
-**Header transformation**
-- Rules apply to the request or the response, with actions `ADD`, `MODIFY`, `REMOVE` and `FORWARD`.
-- Hop-by-hop headers are always stripped.
-- `Authorization` and `Cookie` are not forwarded downstream. Header rules naming `Authorization`, `Cookie` or `Set-Cookie` are rejected at configuration time.
-
-**Resilience and error handling**
-- Per-route timeout (1 ms to 300,000 ms) enforced on the downstream call.
-- Structured error responses with stable codes: `DOWNSTREAM_TIMEOUT` (504), `TARGET_CONNECTION_FAILURE` / `TARGET_UNAVAILABLE` (502), `INVALID_TARGET_CONFIGURATION` (502), `GATEWAY_INTERNAL_ERROR` (500).
-- **Last-known-good registry:** if a refresh fails or is rejected, the gateway keeps serving the previous configuration and marks itself degraded.
-- Startup loads routes from API Management with retries (default 30 attempts, 2 s apart) before refusing to start.
-- Refresh events are validated and de-duplicated by route version, so duplicate or out-of-order notifications are ignored.
-
-**Observability**
-- **Correlation IDs:** accepts a valid incoming `X-Correlation-ID` (or generates a UUID), forwards it downstream and returns it on the response.
-- **Access events:** every request (including rate-limit rejections and idempotency replays) is published to Kafka with route, method, status, outcome and duration.
-- Route-registry and Kafka-refresh health indicators on `/actuator/health`.
-
-### API Management (control plane)
-
-**Authentication**
-- `POST /api/auth/login` issues a signed HS256 JWT (`sub`, `role`, `iat`, `exp`, optional `organizationId`, issuer `gatekeeper-api-management`).
-- Passwords hashed with BCrypt. Stateless sessions, with a configurable token lifetime (default 3600 s).
-- Tenant logins are refused while the organization is not `ACTIVE`.
-
-**Organizations (multi-tenancy)**
-- Create, list, view, update and delete organizations, each with a unique lowercase slug.
-- Lifecycle: `PENDING` (on creation), `ACTIVE`, `SUSPENDED`, `DELETED`.
-- Deletion is **soft**: the organization is hidden from queries but retained.
-- Manage the organization's **tenant administrator** (one per organization): create, view, update, enable/disable and delete.
-
-**Route management**
-- Full CRUD for routes: identifier, name, description, path pattern, target URI, strip-prefix, allowed methods and active flag.
-- Activate or deactivate a route without deleting it.
-- Paged route listing with an `active` filter and sorting.
-- Soft delete, with history preserved.
-- Route identifiers are unique per organization.
-
-**Route policies**
-- Authentication required and permitted roles.
-- Rate limit (requests, window, scope).
-- Timeout.
-- POST idempotency.
-- Path rewrite target prefix.
-- Request and response header rules.
-- Policy-only updates through a dedicated endpoint.
-
-**Validation**
-- Target must be an absolute HTTP(S) URI.
-- Path pattern must start with `/`.
-- Methods restricted to `GET POST PUT PATCH DELETE HEAD OPTIONS`.
-- Idempotency requires `POST` among the allowed methods.
-- Rate-limit values and timeout must be in range.
-- Permitted roles must be known application roles.
-- `ADD` and `MODIFY` header rules require a value.
-
-**Versioning**
-- Every change creates a numbered **immutable snapshot** recording the change type, author and time (`CREATE`, `UPDATE`, `POLICY_UPDATE`, `ACTIVATE`, `DEACTIVATE`, `DELETE`, `RESTORE:<n>`).
-- **Compare** any two versions with field-level differences.
-- **Restore** any earlier version. A restore creates a new version rather than rewriting history, and the snapshot is re-validated first.
-
-**Tenant isolation**
-- Tenant admins can only read and modify routes in their own organization, derived from the JWT `organizationId` claim.
-- Cross-tenant access returns `403`. Platform admins can see across organizations.
-
-**Reliability and governance**
-- **Transactional outbox:** route changes are written atomically with their outbox event, then published to Kafka by a scheduled publisher (retries up to 10 times, then marks the event `FAILED`).
-- **Audit logging:** an `@Audited` aspect records actor, action, resource, result, duration and timestamp for route operations in `control_plane_audit_records`.
-- **Flyway migrations** manage the MySQL schema, with Hibernate set to `validate`.
-- Consistent JSON error responses through a global exception handler.
-- Public `/health` endpoint with database status.
+### API Management
+- Users, roles and tenant-aware accounts.
+- Route and gateway policy management.
+- Versioned gateway configuration, published to the gateway through events.
+- Service-to-service authentication for the gateway (`GATEWAY_SERVICE` role).
 
 ### Analytics
+- Consumes gateway access events from Kafka.
+- Stores API usage statistics in MongoDB.
 
-- Consumes `gateway-access-events` from Kafka and stores them in MongoDB.
-- **Idempotent ingestion** by `eventId` (unique index), so redelivered events are not double counted.
-- Restricted to `PLATFORM_ADMIN` (statistics span all tenants), validated with the shared JWT secret and issuer.
+### Management Console
+- React single-page app for operating the platform.
+- Same-origin proxy design, so the backend needs no CORS configuration.
 
-| Endpoint | Returns |
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client([Client / Console]) -->|HTTPS| Nginx[Nginx + TLS]
+    Nginx --> Console[React Console]
+    Console -->|/proxy/*| Mgmt
+    Console -->|/proxy/*| Analytics
+
+    Client2([API Consumers]) --> GW[Smart Gateway :8080]
+    GW <-->|rate limits, idempotency| Redis[(Redis)]
+    GW -->|login + fetch routes| Mgmt[API Management :8081]
+    GW -->|proxy| Catalog[Catalog Service :8082]
+    GW -->|proxy| Order[Order Service :8083]
+    GW -->|gateway-access-events| Kafka{{Kafka}}
+
+    Mgmt -->|gateway-configuration-events| Kafka
+    Mgmt --> MySQL[(MySQL)]
+    Kafka -->|route refresh| GW
+    Kafka -->|access events| Analytics[Analytics :8084]
+    Analytics --> Mongo[(MongoDB)]
+```
+
+### Design decisions
+
+| Decision | Reason |
 |---|---|
-| `GET /api/analytics/summary` | Total, successful and failed requests, average response time |
-| `GET /api/analytics/routes` | Per-route request count and average response time |
-| `GET /api/analytics/slow-routes?limit=10` | Slowest routes by average response time |
-| `GET /api/analytics/rate-limit-rejections` | Count of rate-limited requests |
-| `GET /api/analytics/idempotency-replays` | Count of replayed idempotent requests |
-
-### NexGate Console (web UI)
-
-A React single-page admin console with role-specific navigation.
-
-**Platform admin**
-- Platform overview.
-- Organizations: list, search, filter by status, create (slug auto-suggested), edit, change status (with confirmation) and delete (type the slug to confirm).
-- Tenant administrators: create, view, edit, enable or disable and delete, one organization at a time.
-- Read-only route oversight across organizations, with a configuration-versions index.
-- Platform analytics: charts for summary, per-route, slow-route, rate-limit and idempotency metrics.
-- **Service health** and **infrastructure health** dashboards that probe each service.
-- Audit logs and settings pages.
-
-**Tenant admin**
-- Tenant overview.
-- Route management: create, edit, activate or deactivate and delete.
-- Visual **route pipeline** showing how each policy applies to a request.
-- Policy editor: authentication and roles, rate limit, timeout, idempotency, rewrite and header rules.
-- Version history: compare two versions, inspect snapshots and restore.
-- Organization details and profile.
-
-**Console behavior**
-- Light, dark and system themes.
-- Form validation that mirrors backend rules (React Hook Form + Zod), with server conflicts mapped back onto the right field.
-- Session token kept in `sessionStorage` only (never `localStorage`, never logged), with an expiry warning two minutes before sign-out.
-- The token is attached only to API Management and Analytics requests, never to the gateway or demo services.
-- Role guards in the UI. Spring Security remains the authorization boundary.
-- Query cache cleared on sign-out so one user's data never appears for the next.
-- Clear, honest states for unavailable backend capabilities instead of placeholder data.
-
-### Demo services
-
-Two small downstream services for trying the gateway end to end.
-
-- **Catalog** (`:8082`): list and fetch products, create a product, plus a `/api/catalog/delay?ms=` endpoint for testing timeouts.
-- **Order** (`:8083`): create, fetch and list orders, plus `/api/orders/delay?ms=`.
+| **Control plane and data plane are separate.** API Management owns configuration; the Gateway only serves traffic. | The gateway can scale independently and keeps serving traffic even if the admin API is briefly down. |
+| **Configuration changes propagate through Kafka.** | The gateway refreshes routes without polling or restarts, and changes are decoupled from the admin request. |
+| **Rate limit and idempotency state live in Redis.** | The gateway stays stateless, so multiple instances share the same counters and keys. |
+| **Analytics is asynchronous.** | Logging an access event never adds latency to the request path. |
+| **The gateway authenticates to management as a service account.** | Route data is only readable by the `GATEWAY_SERVICE` role. |
+| **The console talks to the backend through a same-origin proxy.** | No CORS surface on any backend service. |
 
 ---
 
-## Roles and access
+## Request Lifecycle
 
-| Role | Purpose | Can access |
+1. A client sends a request to the Smart Gateway.
+2. The gateway assigns an `X-Correlation-ID`.
+3. The JWT is validated (signature, issuer, expiry) and the caller's role is resolved.
+4. The request path is matched against the active route table. No match returns `404 ROUTE_NOT_FOUND`.
+5. The route's policies are applied: rate limit check (Redis), idempotency check (Redis), request transformation.
+6. The request is proxied to the downstream service.
+7. The response is returned to the client.
+8. An access event is published to the `gateway-access-events` Kafka topic.
+9. The Analytics service consumes the event and writes usage statistics to MongoDB.
+
+Example error body:
+
+```json
+{
+  "timestamp": "2026-11-25T12:50:14.842657339Z",
+  "status": 404,
+  "errorCode": "ROUTE_NOT_FOUND",
+  "message": "No active route matches the request path",
+  "path": "/",
+  "correlationId": "8c126ed8-d024-489a-b28c-ae9b140c8de6"
+}
+```
+
+---
+
+## Services
+
+| Service | Port | Datastore / Dependencies | Responsibility |
+|---|---|---|---|
+| `smart-gateway-service` | 8080 | Redis, Kafka, API Management | Routing, JWT auth, rate limiting, idempotency, transformation, proxying |
+| `api-management-service` | 8081 | MySQL, Kafka | Users, roles, routes, policies, configuration versions, token issuing |
+| `catalog-service` | 8082 | none | Demo downstream API (products) |
+| `order-service` | 8083 | none | Demo downstream API (orders) |
+| `analytics-service` | 8084 | MongoDB, Kafka | Consumes access events, stores usage statistics |
+| `common` | n/a | n/a | Shared library module used by the services |
+
+**Kafka topics** (created automatically by the `kafka-init` container, 3 partitions each):
+
+| Topic | Producer | Consumer |
 |---|---|---|
-| `PLATFORM_ADMIN` | Operates the platform | `/api/platform/**`, `/api/gateway/admin/**` (all organizations), `/api/analytics/**` |
-| `TENANT_ADMIN` | Manages one organization's APIs | `/api/gateway/admin/**` (own organization only) |
-| `GATEWAY_SERVICE` | Service account used by the gateway | `GET /api/gateway/routes` (active routes). Cannot sign in to the console. |
+| `gateway-configuration-events` | API Management | Smart Gateway |
+| `gateway-access-events` | Smart Gateway | Analytics |
 
-Application roles accepted in route policies: `PLATFORM_ADMIN`, `TENANT_ADMIN`, `GATEWAY_SERVICE`, `USER`, `ADMIN`.
+**Health:** the management service exposes `GET /health`, which reports service and database status:
+
+```json
+{"serviceStatus":"UP","dbStatus":"UP","timestamp":"2026-11-25T12:45:00.449557419"}
+```
 
 ---
 
-## Tech stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Backend | Java 21, Spring Boot 3.5, Spring Security (OAuth2 resource server / JWT), Spring Data JPA, Spring Data MongoDB, Spring Kafka, Spring AOP |
-| Data | MySQL 8.4 (Flyway), MongoDB 7, Redis 7.4 |
-| Messaging | Apache Kafka (KRaft mode, Confluent 7.7) |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS 4, React Router 7, TanStack Query, React Hook Form, Zod, Recharts, Lucide |
-| Testing | JUnit, Spring Boot Test, Testcontainers, Vitest, React Testing Library |
-| Build and run | Maven (multi-module with wrapper), Docker, Docker Compose |
+| Language / Runtime | Java 21 |
+| Framework | Spring Boot, Spring Security |
+| Relational store | MySQL 8.4 (schema managed by versioned SQL migrations) |
+| Document store | MongoDB 7.0 |
+| Cache / shared state | Redis 7.4 |
+| Messaging | Apache Kafka 7.7 (KRaft mode, no ZooKeeper) |
+| Build | Maven (wrapper included) |
+| Containers | Docker, Docker Compose |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, React Hook Form, Zod, Recharts |
 
 ---
 
-## Getting started
+## Repository Structure
+
+```
+nexgate/
+├── backend/
+│   ├── smart-gateway-service/      # Data plane: routing, auth, rate limit, proxy
+│   ├── api-management-service/     # Control plane: users, routes, policies
+│   ├── analytics-service/          # Kafka consumer -> MongoDB
+│   ├── catalog-service/            # Demo downstream service
+│   ├── order-service/              # Demo downstream service
+│   └── common/                     # Shared module
+├── frontend/                       # React management console (Vite)
+│   └── docs/
+├── infrastructure/
+│   ├── docker/compose.yaml         # Full local/production stack
+│   └── kafka/                      # Kafka notes
+├── .env.example                    # Environment template
+├── pom.xml                         # Parent Maven build
+├── mvnw / mvnw.cmd                 # Maven wrapper
+└── README.md
+```
+
+---
+
+## Quick Start
 
 ### Prerequisites
 
-- JDK 21 (to build and run outside Docker)
-- Docker and Docker Compose
-- Node.js `^20.19.0` or `>=22.12.0` and npm 10+ (for the console)
+- Docker 24+ with the Compose plugin
+- Node.js 20.19+ or 22 (frontend only)
+- 8 GB RAM recommended (five JVMs plus Kafka and three datastores)
 
-### 1. Configure the environment
+### 1. Clone
+
+```bash
+git clone https://github.com/rajanSoni0/nexgate.git
+cd nexgate
+```
+
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-At minimum, set a strong `NEXGATE_JWT_SECRET` (HS256, **at least 32 bytes**) and `NEXGATE_GATEWAY_PASSWORD`. See [Configuration](#configuration).
-
-### 2. Start the backend stack
+Then generate real secrets (see [Configuration](#configuration)):
 
 ```bash
-docker compose -f infrastructure/docker/compose.yaml --env-file .env up --build
+sed -i "s|^NEXGATE_JWT_SECRET=.*|NEXGATE_JWT_SECRET=$(openssl rand -hex 32)|" .env
+sed -i "s|^MYSQL_PASSWORD=.*|MYSQL_PASSWORD=$(openssl rand -hex 16)|" .env
+sed -i "s|^MYSQL_ROOT_PASSWORD=.*|MYSQL_ROOT_PASSWORD=$(openssl rand -hex 16)|" .env
+sed -i "s|^MONGO_ROOT_PASSWORD=.*|MONGO_ROOT_PASSWORD=$(openssl rand -hex 16)|" .env
 ```
 
-This starts MySQL, MongoDB, Redis, Kafka, the two Kafka topics (`gateway-access-events`, `gateway-configuration-events`), API Management, Smart Gateway, Analytics, Catalog and Order. The gateway waits for API Management to be healthy.
+Make sure `NEXGATE_GATEWAY_PASSWORD` is set exactly once. See the next section for how it ties to the seeded account.
 
-### 3. Start the console
+### 3. Start the backend stack
+
+The compose file lives in `infrastructure/docker/` but its build context is the repo root, so run it from the root with `--project-directory`:
+
+```bash
+docker compose --project-directory . -f infrastructure/docker/compose.yaml up -d --build
+docker compose --project-directory . -f infrastructure/docker/compose.yaml ps
+```
+
+The first build downloads Maven dependencies and can take 10 to 20 minutes. On low-memory machines limit parallel builds:
+
+```bash
+export COMPOSE_PARALLEL_LIMIT=2
+```
+
+### 4. Verify
+
+```bash
+curl http://localhost:8081/health      # {"serviceStatus":"UP","dbStatus":"UP",...}
+curl -i http://localhost:8080          # 404 ROUTE_NOT_FOUND (expected: no routes yet)
+```
+
+A `404 ROUTE_NOT_FOUND` from the gateway on a fresh install is the healthy state.
+
+### 5. Run the frontend
 
 ```bash
 cd frontend
 npm ci
-cp .env.example .env.local   # only if your service ports differ
-npm run dev
+npm run dev          # development, http://localhost:5173
+# or
+npm run build && npm run preview -- --host 0.0.0.0 --port 4173
 ```
 
-Open <http://localhost:5173> and sign in with an administrator account.
-
-> The backend has no CORS configuration, so the console calls same-origin `/proxy/<service>/**` paths and the Vite dev and preview servers forward them to each service. See `frontend/README.md` for details.
-
-### Running services individually
+### Stop / reset
 
 ```bash
-./mvnw clean test
-./mvnw spring-boot:run -pl backend/api-management-service
-./mvnw spring-boot:run -pl backend/smart-gateway-service
-./mvnw spring-boot:run -pl backend/analytics-service
-./mvnw spring-boot:run -pl backend/catalog-service
-./mvnw spring-boot:run -pl backend/order-service
+docker compose --project-directory . -f infrastructure/docker/compose.yaml down        # keep data
+docker compose --project-directory . -f infrastructure/docker/compose.yaml down -v     # DELETE all data
 ```
-
-On Windows use `mvnw.cmd`. Health endpoints are at `/actuator/health` on each service (and `/health` on API Management).
-
-### Frontend commands
-
-| Command | Description |
-|---|---|
-| `npm run dev` | Dev server with backend proxy (port 5173) |
-| `npm run build` | Type-check and production build |
-| `npm run preview` | Serve the build with the same proxy (port 4173) |
-| `npm test` | Run the Vitest suite |
-| `npm run typecheck` | Type-check only |
-
----
-
-## End-to-end walkthrough
-
-A minimal tour: onboard a tenant, publish a route and call it through the gateway. (On Windows PowerShell, use `curl.exe`.)
-
-**1. Sign in as platform admin**
-
-```bash
-curl -s -X POST http://localhost:8081/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"platform-admin","password":"<your-platform-admin-password>"}'
-# copy the "token" value into $PLATFORM_TOKEN
-```
-
-**2. Create and activate an organization**
-
-```bash
-curl -s -X POST http://localhost:8081/api/platform/organizations \
-  -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"Acme Corp","slug":"acme"}'          # created as PENDING
-
-curl -s -X PATCH http://localhost:8081/api/platform/organizations/1/status \
-  -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" \
-  -d '{"status":"ACTIVE"}'
-```
-
-**3. Create the tenant administrator and sign in as them**
-
-```bash
-curl -s -X POST http://localhost:8081/api/platform/organizations/1/tenant-admin \
-  -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" \
-  -d '{"username":"acme-admin","password":"a-strong-password","enabled":true}'
-
-curl -s -X POST http://localhost:8081/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"acme-admin","password":"a-strong-password"}'
-# copy the token into $TENANT_TOKEN
-```
-
-**4. Publish a route to the demo catalog service**
-
-```bash
-curl -s -X POST http://localhost:8081/api/gateway/admin/routes \
-  -H "Authorization: Bearer $TENANT_TOKEN" -H "Content-Type: application/json" \
-  -d '{
-    "routeId": "catalog",
-    "name": "Catalog API",
-    "pathPattern": "/catalog/**",
-    "targetUri": "http://catalog:8082",
-    "stripPrefix": false,
-    "allowedMethods": ["GET", "POST"],
-    "active": true,
-    "policy": {
-      "authenticationRequired": false,
-      "permittedRoles": [],
-      "rateLimitEnabled": true,
-      "rateLimitRequests": 5,
-      "rateLimitWindowSeconds": 60,
-      "rateLimitScope": "IP",
-      "timeoutMs": 5000,
-      "idempotencyEnabled": false,
-      "rewriteEnabled": true,
-      "rewriteTargetPrefix": "/api/catalog"
-    },
-    "headerRules": []
-  }'
-```
-
-**5. Call it through the gateway** (the route is picked up within seconds via Kafka)
-
-```bash
-curl -i http://localhost:8080/catalog/products
-```
-
-Send more than five requests in a minute to see `429 RATE_LIMIT_EXCEEDED` with a `Retry-After` header.
-
----
-
-## API reference
-
-### API Management (`:8081`)
-
-| Method | Path | Access | Description |
-|---|---|---|---|
-| POST | `/api/auth/login` | Public | Sign in and receive a JWT |
-| GET | `/health` | Public | Service and database status |
-| POST / GET | `/api/platform/organizations` | Platform admin | Create / list organizations |
-| GET / PUT / DELETE | `/api/platform/organizations/{id}` | Platform admin | View / update / soft-delete |
-| PATCH | `/api/platform/organizations/{id}/status` | Platform admin | Change organization status |
-| POST / GET / PUT / DELETE | `/api/platform/organizations/{id}/tenant-admin` | Platform admin | Manage tenant administrator |
-| POST / GET | `/api/gateway/admin/routes` | Platform or tenant admin | Create / list routes (paged, `active` filter) |
-| GET / PUT / DELETE | `/api/gateway/admin/routes/{id}` | Platform or tenant admin | View / update / soft-delete a route |
-| PATCH | `/api/gateway/admin/routes/{id}/status` | Platform or tenant admin | Activate or deactivate |
-| GET / PUT | `/api/gateway/admin/routes/{id}/policy` | Platform or tenant admin | Read / update policy |
-| GET | `/api/gateway/admin/routes/{id}/versions` | Platform or tenant admin | Version history |
-| GET | `/api/gateway/admin/routes/{id}/versions/{v}` | Platform or tenant admin | One version snapshot |
-| GET | `/api/gateway/admin/routes/{id}/versions/compare?from=&to=` | Platform or tenant admin | Compare two versions |
-| POST | `/api/gateway/admin/routes/{id}/versions/{v}/restore` | Platform or tenant admin | Restore a version |
-| GET | `/api/gateway/routes` | Gateway service | Active routes for the gateway |
-
-### Gateway error codes (`:8080`)
-
-| Status | Code | Meaning |
-|---|---|---|
-| 400 | `IDEMPOTENCY_KEY_REQUIRED` | POST to an idempotent route without `Idempotency-Key` |
-| 401 | `MISSING_JWT` / `INVALID_JWT` | No token, or the token is invalid or expired |
-| 403 | `INSUFFICIENT_ROLE` | Authenticated but not permitted for this route |
-| 404 | `ROUTE_NOT_FOUND` | No active route matches the path |
-| 405 | `METHOD_NOT_ALLOWED` | Path matches, method not allowed |
-| 409 | `IDEMPOTENCY_CONFLICT` | Key in progress, or reused with a different payload |
-| 429 | `RATE_LIMIT_EXCEEDED` | Rate limit hit (see `Retry-After`) |
-| 502 | `TARGET_CONNECTION_FAILURE`, `TARGET_UNAVAILABLE`, `INVALID_TARGET_CONFIGURATION` | Downstream problem |
-| 503 | `RATE_LIMIT_STORE_UNAVAILABLE`, `IDEMPOTENCY_STORE_UNAVAILABLE` | Redis unavailable (fails closed) |
-| 504 | `DOWNSTREAM_TIMEOUT` | Downstream exceeded the route timeout |
-
-### Demo services
-
-| Service | Endpoints |
-|---|---|
-| Catalog (`:8082`) | `GET /api/catalog/products`, `GET /api/catalog/products/{id}`, `POST /api/catalog/products`, `GET /api/catalog/delay?ms=` |
-| Order (`:8083`) | `POST /api/orders`, `GET /api/orders`, `GET /api/orders/{id}`, `GET /api/orders/delay?ms=` |
 
 ---
 
 ## Configuration
 
-Key environment variables (see `.env.example` for the full list):
+All configuration is environment-driven. Copy `.env.example` to `.env`. **Never commit `.env`.**
 
-| Variable | Purpose |
-|---|---|
-| `NEXGATE_JWT_SECRET` | Shared HS256 secret (>= 32 bytes) used by API Management, Gateway and Analytics |
-| `NEXGATE_JWT_ISSUER` | Expected token issuer (default `gatekeeper-api-management`) |
-| `NEXGATE_JWT_EXPIRATION_SECONDS` | Token lifetime (default `3600`) |
-| `NEXGATE_GATEWAY_USERNAME` / `NEXGATE_GATEWAY_PASSWORD` | Credentials the gateway uses to fetch routes from API Management |
-| `NEXGATE_MANAGEMENT_BASE_URL` | API Management URL as seen by the gateway |
-| `NEXGATE_REDIS_URL` | Redis connection URL for rate limiting and idempotency |
-| `NEXGATE_IDEMPOTENCY_TTL_SECONDS` | Idempotency record lifetime (default `86400`) |
-| `NEXGATE_OUTBOX_PUBLISH_DELAY_MS` | Outbox publisher interval (default `5000`) |
-| `NEXGATE_MYSQL_URL` / `_USERNAME` / `_PASSWORD` | API Management database |
-| `NEXGATE_MONGODB_URI` | Analytics database |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka brokers |
-| `VITE_*_API_URL` | Console dev-proxy upstreams (frontend `.env.local`) |
+| Variable | Required | Description |
+|---|---|---|
+| `NEXGATE_JWT_SECRET` | Yes | HS256 signing key shared by management, gateway and analytics. Minimum 32 bytes. |
+| `NEXGATE_JWT_ISSUER` | No | Token issuer. Default `gatekeeper-api-management`. |
+| `NEXGATE_GATEWAY_USERNAME` | No | Service account the gateway uses. Default `gateway-service`. |
+| `NEXGATE_GATEWAY_PASSWORD` | Yes | Password for that service account. Must match the seeded account (see below). |
+| `MYSQL_DATABASE` | No | Default `nexgate_management`. |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | No / Yes | Application database user. Must not be `root`. |
+| `MYSQL_ROOT_PASSWORD` | Yes | MySQL root password. |
+| `MONGO_DATABASE` | No | Default `nexgate_analytics`. |
+| `MONGO_ROOT_USERNAME` / `MONGO_ROOT_PASSWORD` | No / Yes | MongoDB admin credentials. Use URL-safe values (hex is ideal). |
+| `NEXGATE_IDEMPOTENCY_TTL_SECONDS` | No | Idempotency key lifetime. Default `86400`. |
+| `NEXGATE_REDIS_URL` | No | Default `redis://redis:6379`. |
+| `KAFKA_BOOTSTRAP_SERVERS` | No | Default `kafka:29092` (inside the Docker network). |
+| `NEXGATE_MANAGEMENT_BASE_URL` | No | Default `http://api-management:8081`. |
 
-> **Security:** never commit `.env`. Replace every `change-me` value, and change the passwords of the accounts seeded by the Flyway migrations before any real deployment.
+The compose file refuses to start if `NEXGATE_JWT_SECRET` or `NEXGATE_GATEWAY_PASSWORD` is unset.
 
 ---
 
-## Testing
+## Default Accounts and Security Hardening
+
+The schema migration `V3__seed_platform_accounts.sql` creates two accounts with **hardcoded BCrypt hashes**:
+
+| Account | Role | Purpose |
+|---|---|---|
+| `platform-admin` | `PLATFORM_ADMIN` | Human administrator for the console |
+| `gateway-service` | `GATEWAY_SERVICE` | Machine identity the gateway uses to fetch routes |
+
+> **Because these hashes are committed to a public repository, treat the seeded passwords as publicly known. Replace them before exposing any instance to the internet.**
+
+### Replacing the seeded hashes
+
+Before the first start (the database must be empty, since migrations run once):
 
 ```bash
-./mvnw clean test            # all backend modules
-cd frontend && npm test      # 86 frontend tests
+sudo apt install -y apache2-utils     # provides htpasswd
+
+GW_PASS=$(grep '^NEXGATE_GATEWAY_PASSWORD=' .env | cut -d= -f2)
+ADMIN_PASS=$(openssl rand -hex 12)
+echo "PLATFORM_ADMIN_PASSWORD=$ADMIN_PASS" >> .env
+
+GW_HASH=$(htpasswd -bnBC 10 "" "$GW_PASS"    | tr -d ':\n')
+ADMIN_HASH=$(htpasswd -bnBC 10 "" "$ADMIN_PASS" | tr -d ':\n')
 ```
 
-- **Gateway:** route matching, registry, path and header transformation, proxy forwarder, JWT validation, authorization, Redis rate limiting and idempotency, Kafka refresh listener, correlation IDs, error handling and a full security-pipeline integration test.
-- **API Management:** policy validation, version comparison, tenant authorization, audit aspect, outbox publisher and route-management integration tests.
-- **Analytics:** event processing, statistics, controller and security tests.
-- **Demo services:** controller tests.
-- **Console:** authentication and session handling, role guards, form validation, organizations, tenant admins, routes (create, policy, versions, restore, paging), analytics states and health classification.
+Then substitute the two hashes in
+`backend/api-management-service/src/main/resources/db/migrations/V3__seed_platform_accounts.sql`
+and build.
+
+If the database already exists, do **not** edit the applied migration. Change the passwords through the application instead (or recreate the volume with `down -v` on a non-production instance).
+
+The gateway's `NEXGATE_GATEWAY_PASSWORD` must be the plaintext of whichever hash is seeded for `gateway-service`. If they do not match, the gateway cannot fetch routes.
 
 ---
 
-## Project structure
+## Frontend Console
 
-```text
-nexgate/
-├── backend/
-│   ├── api-management-service/   Control plane (MySQL, Flyway, outbox, audit)
-│   ├── smart-gateway-service/    Data plane (routing, auth, rate limit, idempotency, proxy)
-│   ├── analytics-service/        Kafka consumer + MongoDB statistics
-│   ├── catalog-service/          Demo downstream service
-│   ├── order-service/            Demo downstream service
-│   └── common/                   Shared event contracts
-├── frontend/                     NexGate Console (React + TypeScript + Vite)
-│   └── docs/INTEGRATION_CHECKLIST.md
-├── infrastructure/
-│   ├── docker/compose.yaml       Full local stack
-│   └── kafka/                    Topic initialization notes
-├── .env.example
-└── pom.xml                       Maven parent (multi-module)
+A React 19 + TypeScript single-page app in `frontend/`.
+
+**Same-origin proxy.** The backend services have no CORS configuration by design. The browser only ever talks to its own origin, and the Vite dev/preview server forwards `/proxy/<service>/**` to the right backend:
+
+| Browser path | Forwards to |
+|---|---|
+| `/proxy/management` | `VITE_MANAGEMENT_API_URL` (default `http://localhost:8081`) |
+| `/proxy/gateway` | `VITE_GATEWAY_API_URL` (default `http://localhost:8080`) |
+| `/proxy/analytics` | `VITE_ANALYTICS_API_URL` (default `http://localhost:8084`) |
+| `/proxy/catalog` | `VITE_CATALOG_API_URL` (default `http://localhost:8082`) |
+| `/proxy/order` | `VITE_ORDER_API_URL` (default `http://localhost:8083`) |
+
+These variables are read by the Vite server, not by the browser. **Do not put credentials or tokens in them.**
+
+Because the proxy is part of the Vite server, any deployment of the console must run `vite preview` (or replicate the same path mapping in the reverse proxy).
+
+Scripts:
+
+```bash
+npm run dev         # dev server with hot reload
+npm run build       # typecheck + production build into dist/
+npm run preview     # serve dist/ with the proxy enabled
+npm run typecheck
+npm test
 ```
+
+Further notes are in `frontend/docs/`.
 
 ---
 
-## Known limitations
+## Production Deployment (AWS EC2)
 
-- **Audit log viewer:** audit records are written to MySQL, but no API endpoint exposes them yet, so the console explains what is recorded instead of showing a table.
-- **Tenant analytics:** analytics endpoints are platform-wide and have no organization filter, so tenant analytics pages are intentionally withheld to avoid leaking other tenants' traffic.
-- **Analytics queries** have no time-range parameters; only overall aggregates are available.
-- **Tenant admin updates** always require a new password (the request validates it as mandatory).
-- **No token refresh:** sessions end at token expiry.
-- **Console deployment** uses the Vite dev or preview server for the same-origin proxy. Serving `dist/` elsewhere needs an equivalent reverse proxy or CORS on the backend.
-- **Authorization forwarding** to downstream services is not configurable, because header rules naming `Authorization` are rejected.
+This is the exact topology used for the live demo.
+
+```
+Internet ──443──> Nginx (TLS, Let's Encrypt) ──> Vite preview :4173 ──/proxy/*──> Docker services
+```
+
+| Component | Choice |
+|---|---|
+| Region | `ap-southeast-2` (Sydney) |
+| Instance | `m7i-flex.large` (2 vCPU, 8 GB RAM), Ubuntu |
+| Addressing | Elastic IP (stable across stop/start) |
+| DNS | A record for `nex-gate.dev` at Name.com |
+| TLS | Let's Encrypt via certbot, auto-renewed |
+| Backend | Docker Compose |
+| Frontend | `vite preview` managed by PM2 |
+| Edge | Nginx reverse proxy on 80/443 |
+
+### 1. Security group
+
+| Port | Source | Purpose |
+|---|---|---|
+| 22 | Your IP `/32` | SSH |
+| 80 | `0.0.0.0/0` | HTTP (redirects to HTTPS, ACME challenge) |
+| 443 | `0.0.0.0/0` | HTTPS |
+
+**Never expose** 3307 (MySQL), 27017 (MongoDB), 6379 (Redis), 9092 (Kafka), 8081 (management) or 8082 to 8084. Docker publishes these on the host, so the security group is the only barrier. Keep 8080 closed too unless you intentionally serve the gateway publicly.
+
+### 2. Host preparation
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git curl docker.io docker-compose-v2 nginx
+
+# 4 GB swap: five JVMs plus Kafka are tight on 8 GB
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+### 3. Backend
+
+```bash
+git clone https://github.com/rajanSoni0/nexgate.git && cd nexgate
+# configure .env and harden seeded accounts (see sections above)
+export COMPOSE_PARALLEL_LIMIT=2
+docker compose --project-directory . -f infrastructure/docker/compose.yaml up -d --build
+
+# survive reboots
+docker update --restart unless-stopped $(docker ps -q)
+```
+
+### 4. Frontend
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+sudo npm install -g pm2
+
+cd frontend
+npm ci && npm run build
+pm2 start npm --name nexgate-frontend -- run preview -- --host 0.0.0.0 --port 4173
+pm2 save
+pm2 startup        # run the printed sudo command
+```
+
+### 5. Nginx and TLS
+
+`/etc/nginx/sites-available/nexgate`:
+
+```nginx
+server {
+    listen 80;
+    server_name nex-gate.dev www.nex-gate.dev;
+
+    location / {
+        proxy_pass http://localhost:4173;
+        proxy_set_header Host localhost:4173;   # Vite preview rejects unknown hostnames
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/nexgate /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl restart nginx
+
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d nex-gate.dev -d www.nex-gate.dev
+sudo certbot renew --dry-run
+```
+
+After HTTPS works, remove any security-group rule for port 4173.
+
+> `.dev` is on the browser HSTS preload list, so it only loads over HTTPS. Test with `curl` before the certificate is issued.
+
+---
+
+## Operations Runbook
+
+```bash
+# Alias for convenience
+alias nx='docker compose --project-directory ~/nexgate -f ~/nexgate/infrastructure/docker/compose.yaml'
+
+nx ps                              # status
+nx logs smart-gateway --tail=100   # logs (avoid -f in a shared terminal)
+nx restart api-management          # restart one service
+nx up -d --build                   # rebuild and apply changes
+
+pm2 status                         # frontend
+pm2 logs nexgate-frontend --lines 50 --nostream
+pm2 restart nexgate-frontend
+
+docker stats --no-stream           # per-container memory
+free -h                            # host memory and swap
+```
+
+### Updating to a new version
+
+```bash
+cd ~/nexgate
+git pull
+nx up -d --build
+cd frontend && npm ci && npm run build && pm2 restart nexgate-frontend
+```
+
+If you carry local changes (for example custom seed hashes), `git stash` before pulling and `git stash pop` after.
+
+### Backups
+
+- **Secrets:** keep `.env` in a password manager and an offline copy. It is not in Git.
+- **MySQL:** `nx exec mysql sh -c 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" nexgate_management' > backup.sql`
+- **MongoDB:** `nx exec mongodb mongodump --archive --username root --password <pw> --authenticationDatabase admin > mongo.archive`
+
+Named volumes (`mysql-data`, `mongo-data`, `redis-data`, `kafka-data`) persist across `down` but **not** across `down -v`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `docker compose` complains `set NEXGATE_JWT_SECRET` | Missing `.env` values | Fill `NEXGATE_JWT_SECRET` and `NEXGATE_GATEWAY_PASSWORD` |
+| Build fails with "Dockerfile not found" | Ran compose from the wrong directory | Run from repo root with `--project-directory .` |
+| Gateway never starts | `api-management` not healthy yet | `nx logs api-management --tail=100` |
+| Gateway logs 401 against management | `NEXGATE_GATEWAY_PASSWORD` does not match the seeded hash | Re-hash and reseed (see [hardening](#default-accounts-and-security-hardening)) |
+| Containers `Killed` / OOM | Not enough RAM | Add swap, limit `COMPOSE_PARALLEL_LIMIT`, check `docker stats` |
+| Gateway returns `404 ROUTE_NOT_FOUND` | No active route matches the path | Expected on a fresh install; create a route |
+| `vite: not found` | `node_modules` missing | `npm ci` in `frontend/` |
+| Console loads but API calls fail | Preview server not running, or backend down | `pm2 status`, `nx ps` |
+| `Blocked request. This host is not allowed` | Vite host check behind a domain | Keep `proxy_set_header Host localhost:4173` in Nginx |
+| Site unreachable after reboot | Restart policy or PM2 startup not configured | `docker update --restart unless-stopped ...`, `pm2 startup` + `pm2 save` |
+| SSH `Connection timed out` | Your public IP changed | Update the port 22 rule with the new IP |
+| certbot fails | DNS not propagated, or port 80 closed | `nslookup nex-gate.dev`, check security group |
+
+---
+
+## Security Considerations
+
+- **Rotate seeded credentials** before any public deployment. See [above](#default-accounts-and-security-hardening).
+- **Use a strong, unique `NEXGATE_JWT_SECRET`.** Anyone holding it can mint valid tokens for every service.
+- **Keep datastores private.** Never open database or Kafka ports to the internet.
+- **Terminate TLS at the edge.** Credentials and tokens travel in requests; do not serve the console over plain HTTP.
+- **Demo/shared accounts must be least-privilege.** The management console controls routing. A user who can create routes can make the gateway forward traffic to arbitrary hosts (server-side request forgery risk). Give public demo users a read-only or heavily restricted role, and validate route targets against an allow-list.
+- **Secrets stay out of Git.** `.env` is ignored; never paste its contents into issues, chats or logs.
+- Report vulnerabilities privately to the maintainer rather than opening a public issue.
+
+---
+
+## Roadmap
+
+- [ ] `restart: unless-stopped` policies and healthchecks for every service in `compose.yaml`
+- [ ] Seed account passwords supplied through environment instead of committed hashes
+- [ ] Containerized frontend served by Nginx (removes the Vite preview dependency)
+- [ ] CI pipeline (build, test, image publishing)
+- [ ] Observability: Prometheus metrics and distributed tracing
+- [ ] Multi-instance gateway behind a load balancer
+- [ ] Token refresh and revocation
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+1. Fork the repository and create a feature branch: `git checkout -b feature/my-change`
+2. Make your change with tests where applicable (`./mvnw test`, `npm test`)
+3. Commit with a clear message and open a pull request describing what and why
+
+---
+
+## License
+
+This project is open source and licensed under the [MIT License](LICENSE).
+
+You are free to use, copy, modify, merge, publish, distribute, sublicense and sell copies of this software, for personal or commercial purposes. The only requirement is that the copyright notice and license text are included in all copies or substantial portions of the software.
+
+The software is provided "as is", without warranty of any kind.
 
 ---
 
 ## Author
 
-Built by [Rajan Soni](https://github.com/rajanSoni0).
+**Rajan Soni** · [GitHub](https://github.com/rajanSoni0)
+
+If you find this project useful, consider giving it a star.
